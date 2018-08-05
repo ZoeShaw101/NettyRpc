@@ -17,7 +17,9 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
+import java.util.logging.SocketHandler;
 
+import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import org.apache.commons.collections4.MapUtils;
 import org.slf4j.Logger;
@@ -54,6 +56,9 @@ public class RpcServer implements ApplicationContextAware, InitializingBean {
         this.serviceRegistry = serviceRegistry;
     }
 
+    /**
+     * 服务在启动的时候扫描得到所有的服务接口及其实现
+     */
     @Override
     public void setApplicationContext(ApplicationContext ctx) throws BeansException {
         Map<String, Object> serviceBeanMap = ctx.getBeansWithAnnotation(RpcService.class);
@@ -105,33 +110,39 @@ public class RpcServer implements ApplicationContextAware, InitializingBean {
         if (bossGroup == null && workerGroup == null) {
             bossGroup = new NioEventLoopGroup();
             workerGroup = new NioEventLoopGroup();
-            ServerBootstrap bootstrap = new ServerBootstrap();
-            bootstrap.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        public void initChannel(SocketChannel channel) throws Exception {
-                            channel.pipeline()
+            try {
+                ServerBootstrap bootstrap = new ServerBootstrap();
+                bootstrap.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class)
+                        .childHandler(new ChannelInitializer<SocketChannel>() {
+                            @Override
+                            protected void initChannel(SocketChannel channel) throws Exception {
+                                channel.pipeline()
                                     .addLast(new LengthFieldBasedFrameDecoder(65536, 0, 4, 0, 0))
                                     .addLast(new RpcDecoder(RpcRequest.class))
                                     .addLast(new RpcEncoder(RpcResponse.class))
                                     .addLast(new RpcHandler(handlerMap));
-                        }
-                    })
-                    .option(ChannelOption.SO_BACKLOG, 128)
-                    .childOption(ChannelOption.SO_KEEPALIVE, true);
+                            }
+                        })
+                        .option(ChannelOption.SO_BACKLOG, 128)
+                        .childOption(ChannelOption.SO_KEEPALIVE, true);
 
-            String[] array = serverAddress.split(":");
-            String host = array[0];
-            int port = Integer.parseInt(array[1]);
+                String[] array = serverAddress.split(":");
+                String host = array[0];
+                int port = Integer.parseInt(array[1]);
 
-            ChannelFuture future = bootstrap.bind(host, port).sync();
-            logger.info("Server started on port {}", port);
+                ChannelFuture future = bootstrap.bind(host, port).sync();
+                logger.info("Server started on port {}", port);
 
-            if (serviceRegistry != null) {
-                serviceRegistry.register(serverAddress);
+                if (serviceRegistry != null) {
+                    serviceRegistry.register(serverAddress);
+                }
+
+                future.channel().closeFuture().sync();
+
+            } finally {
+                bossGroup.shutdownGracefully().sync();
+                workerGroup.shutdownGracefully().sync();
             }
-
-            future.channel().closeFuture().sync();
         }
     }
 
